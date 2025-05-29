@@ -55,9 +55,10 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
     # Если нужно пересоздать или база повреждена
     for attempt in range(3):
         try:
-            if os.path.exists(persist_dir):
-                shutil.rmtree(persist_dir, ignore_errors=True)
-            
+            if force_rebuild:
+                if os.path.exists(persist_dir):
+                    shutil.rmtree(persist_dir, ignore_errors=True)
+           
             os.makedirs(persist_dir, exist_ok=True)
             
             # Создаем новую базу
