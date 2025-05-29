@@ -8,6 +8,8 @@ from langchain_chroma import Chroma
 from langchain.chains import RetrievalQA
 from rag_assistant.main import get_or_create_vectorstore, list_documents, create_qa_chain
 from rag_assistant import config
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 # Должен быть ПЕРВЫМ вызовом в скрипте
 st.set_page_config(
