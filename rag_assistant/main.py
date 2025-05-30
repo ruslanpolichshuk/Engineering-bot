@@ -6,7 +6,6 @@ from rag_assistant.utils import get_or_create_vectorstore as utils_get_vectorsto
 from rag_assistant import config
 from langchain.prompts import PromptTemplate
 
-
 def get_or_create_vectorstore(force_rebuild: bool = False):
     vectordb = utils_get_vectorstore(
         pdf_dir=config.PDF_DIR,
@@ -16,19 +15,25 @@ def get_or_create_vectorstore(force_rebuild: bool = False):
     print("[INFO] Векторная база успешно загружена или создана.")
     return vectordb
 
+def create_qa_chain(vectordb: Chroma, selected_document: str = None):
+    """
+    Создает RetrievalQA цепочку с улучшенным промптом и настройками,
+    при необходимости ограничивает поиск одним документом
+    """
 
-def create_qa_chain(vectordb: Chroma):
-    """
-    Создает RetrievalQA цепочку с улучшенным промптом и настройками
-    """
+    search_kwargs = {
+        "k": 10,
+        "score_threshold": 0.4,
+        "fetch_k": 30
+    }
+
+    if selected_document and selected_document != "Все документы":
+        print(f"[INFO] Ограничиваем поиск документом: {selected_document}")
+        search_kwargs["filter"] = lambda doc: doc.metadata.get("source") == selected_document
 
     retriever = vectordb.as_retriever(
         search_type="mmr",
-        search_kwargs={
-            "k": 10,
-            "score_threshold": 0.4,
-            "fetch_k": 30
-        }
+        search_kwargs=search_kwargs
     )
 
     llm = ChatOpenAI(
@@ -71,7 +76,6 @@ def create_qa_chain(vectordb: Chroma):
 
     print("[INFO] QA-цепочка успешно создана.")
     return qa_chain
-
 
 def list_documents(vectordb) -> list[str]:
     try:

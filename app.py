@@ -23,11 +23,19 @@ def main():
     # ░█▄█░█▀█░█▀▀░█░█░░█░░█▀▀░█░░░█░█
     # ░▀░▀░▀░▀░▀▀▀░▀▀░░▀▀▀░▀▀▀░▀▀▀░▀░▀
 
-    force = st.sidebar.checkbox("♻️ Пересоздать базу векторов")
+    with st.sidebar:
+        st.header("📤 Добавить новые PDF")
+        uploaded_files = st.file_uploader("Загрузите PDF-файлы", type="pdf", accept_multiple_files=True)
+        if uploaded_files:
+            for file in uploaded_files:
+                path = os.path.join(config.PDF_DIR, file.name)
+                with open(path, "wb") as f:
+                    f.write(file.getbuffer())
+            st.success(f"✅ Загружено {len(uploaded_files)} новых PDF-файлов. Перезапустите страницу для обновления базы.")
 
     with st.spinner("🔄 Загрузка векторной базы..."):
         try:
-            vectordb = get_or_create_vectorstore(force_rebuild=force)
+            vectordb = get_or_create_vectorstore(force_rebuild=False)
             all_documents = list_documents(vectordb)
 
             if not all_documents:
@@ -63,7 +71,10 @@ def main():
     if question.strip():
         with st.spinner("🔎 Обработка запроса..."):
             try:
-                qa_chain = create_qa_chain(st.session_state["vectordb"])
+                qa_chain = create_qa_chain(
+                    vectordb=st.session_state["vectordb"],
+                    selected_document=selected if selected != "Все документы" else None
+                )
                 result = qa_chain({"query": question})
                 answer = result.get("result", "")
 
