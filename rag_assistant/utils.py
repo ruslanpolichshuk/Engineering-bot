@@ -36,7 +36,6 @@ def parse_pdf_file(path: str, fname: str) -> list[Document]:
 def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
     embeddings = OpenAIEmbeddings(
         model="text-embedding-ada-002",
-        batch_size=64,
         request_timeout=60,
         show_progress_bar=True
     )
@@ -65,7 +64,7 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
         return vectordb
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    batch_size = 8
+    batch_size = 7
     total_docs = 0
     total_chunks = 0
 
@@ -88,8 +87,8 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
         print(f"[INFO] Чанков из батча: {len(chunks)}")
         total_chunks += len(chunks)
 
-        for j in tqdm(range(0, len(chunks), 64), desc=f"📥 Добавление батча {i // batch_size + 1}"):
-            chunk_batch = chunks[j:j + 64]
+        for j in tqdm(range(0, len(chunks), 32), desc=f"📥 Добавление батча {i // batch_size + 1}"):
+            chunk_batch = chunks[j:j + 32]
             try:
                 vectordb.add_documents(chunk_batch)
                 vectordb.persist()
