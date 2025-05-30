@@ -4,6 +4,7 @@ logging.getLogger("pdfminer").setLevel(logging.ERROR)
 import os
 import time
 import shutil
+import gc
 import pdfplumber
 from tqdm import tqdm
 from retrying import retry
@@ -14,33 +15,22 @@ from langchain_chroma import Chroma
 from pdfminer.pdfparser import PDFSyntaxError
 from rag_assistant import config
 
-def parse_pdfs(pdf_dir: str) -> list[Document]:
-    docs: list[Document] = []
-    all_files = os.listdir(pdf_dir)
-    pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
-
-    print(f"[INFO] Всего PDF-файлов к обработке: {len(pdf_files)}")
-
-    for fname in pdf_files:
-        path = os.path.join(pdf_dir, fname)
-        try:
-            print(f"[LOAD] Загружаем PDF: {fname}")
-            with pdfplumber.open(path) as pdf:
-                for i, page in enumerate(pdf.pages):
-                    text = page.extract_text()
-                    if not text or len(text.strip()) < 20:
-                        print(f"[WARN] Пустая или слишком короткая страница {i+1} в {fname}")
-                        continue
-                    meta = {'source': fname, 'page': i + 1}
-                    docs.append(Document(page_content=text, metadata=meta))
-        except PDFSyntaxError:
-            print(f"[ERROR] Повреждён PDF: {fname}")
-        except Exception as e:
-            print(f"[ERROR] Ошибка с {fname}: {e}")
-
-    print(f"[RESULT] Загружено {len(docs)} страниц из {len(pdf_files)} PDF-файлов")
+def parse_pdf_file(path: str, fname: str) -> list[Document]:
+    docs = []
+    try:
+        with pdfplumber.open(path) as pdf:
+            print(f"[DEBUG] {fname}: {len(pdf.pages)} стр")
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                if not text or len(text.strip()) < 20:
+                    continue
+                meta = {'source': fname, 'page': i + 1}
+                docs.append(Document(page_content=text, metadata=meta))
+    except PDFSyntaxError:
+        print(f"[ERROR] Повреждён PDF: {fname}")
+    except Exception as e:
+        print(f"[ERROR] Ошибка с {fname}: {e}")
     return docs
-
 
 @retry(stop_max_attempt_number=3, wait_fixed=1000)
 def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
@@ -52,73 +42,64 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
     )
 
     os.makedirs(persist_dir, exist_ok=True)
-
     vectordb = Chroma(
         persist_directory=persist_dir,
         embedding_function=embeddings
     )
 
-    # --- Получаем уже добавленные PDF-файлы ---
+    # Определяем уже загруженные документы
     existing_files = set()
     try:
-        existing_metadatas = vectordb.get()["metadatas"]
-        for m in existing_metadatas:
+        for m in vectordb.get()["metadatas"]:
             if isinstance(m, dict) and "source" in m:
                 existing_files.add(m["source"])
     except Exception as e:
-        print(f"[WARN] Не удалось получить список уже добавленных файлов: {e}")
+        print(f"[WARN] Не удалось получить список загруженных PDF: {e}")
 
-    print(f"[INFO] В базе уже есть {len(existing_files)} документов.")
-
-    # --- Определяем новые PDF-файлы ---
     all_pdfs = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
     new_pdfs = [f for f in all_pdfs if f not in existing_files]
+    print(f"[INFO] Всего новых PDF: {len(new_pdfs)}")
 
     if not new_pdfs:
-        print("[INFO] Новых PDF-файлов не найдено. База не обновлена.")
+        print("[INFO] Новых PDF не найдено. Пропускаем обновление базы.")
         return vectordb
 
-    print(f"[INFO] Найдено новых PDF: {len(new_pdfs)}")
-
-    # --- Загружаем и парсим новые PDF-файлы ---
-    docs: list[Document] = []
-    for fname in new_pdfs:
-        try:
-            path = os.path.join(pdf_dir, fname)
-            print(f"[LOAD] Чтение файла {fname}")
-            with pdfplumber.open(path) as pdf:
-                print(f"[DEBUG] Всего страниц в {fname}: {len(pdf.pages)}")
-                for i, page in enumerate(pdf.pages):
-                    text = page.extract_text()
-                    if not text or len(text.strip()) < 20:
-                        print(f"[WARN] Страница {i+1} пустая или слишком короткая.")
-                        continue
-                    meta = {'source': fname, 'page': i + 1}
-                    docs.append(Document(page_content=text, metadata=meta))
-        except Exception as e:
-            print(f"[ERROR] Ошибка при чтении {fname}: {e}")
-
-    print(f"[INFO] Всего новых страниц: {len(docs)}")
-
-    if not docs:
-        print("[WARN] Нет валидных страниц для добавления.")
-        return vectordb
-
-    # --- Разбиваем на чанки ---
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-    chunks = splitter.split_documents(docs)
-    print(f"[INFO] Чанков для добавления: {len(chunks)}")
+    batch_size = 8
+    total_docs = 0
+    total_chunks = 0
 
-    # --- Добавляем чанки батчами ---
-    batch_size = 64
-    for i in tqdm(range(0, len(chunks), batch_size), desc="📥 Добавление новых чанков"):
-        batch = chunks[i:i + batch_size]
-        try:
-            vectordb.add_documents(batch)
-            vectordb.persist()
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"[ERROR] Ошибка при добавлении батча {i // batch_size + 1}: {e}")
+    for i in range(0, len(new_pdfs), batch_size):
+        batch_files = new_pdfs[i:i + batch_size]
+        docs: list[Document] = []
 
-    print("[SUCCESS] Новые документы успешно добавлены в базу.")
+        for fname in batch_files:
+            path = os.path.join(pdf_dir, fname)
+            print(f"[LOAD] {fname}")
+            docs.extend(parse_pdf_file(path, fname))
+
+        print(f"[INFO] Загружено страниц из батча: {len(docs)}")
+        total_docs += len(docs)
+
+        if not docs:
+            continue
+
+        chunks = splitter.split_documents(docs)
+        print(f"[INFO] Чанков из батча: {len(chunks)}")
+        total_chunks += len(chunks)
+
+        for j in tqdm(range(0, len(chunks), 64), desc=f"📥 Добавление батча {i // batch_size + 1}"):
+            chunk_batch = chunks[j:j + 64]
+            try:
+                vectordb.add_documents(chunk_batch)
+                vectordb.persist()
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"[ERROR] Ошибка при загрузке чанков: {e}")
+
+        del docs
+        del chunks
+        gc.collect()
+
+    print(f"[SUCCESS] Загружено всего {total_docs} страниц, {total_chunks} чанков")
     return vectordb
