@@ -39,12 +39,21 @@ def parse_pdfs(pdf_dir: str) -> list[Document]:
 
 
 @retry(stop_max_attempt_number=3, wait_fixed=1000)
+from tqdm import tqdm
+import time
+import shutil
+import os
+from langchain_chroma import Chroma
+from langchain_openai import OpenAIEmbeddings
+from rag_assistant.utils import parse_pdfs
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
 def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
     embeddings = OpenAIEmbeddings(
         model="text-embedding-ada-002",
-        batch_size=64,
+        batch_size=64,           # 🔧 большой батч — меньше запросов
         request_timeout=60,
-        show_progress_bar=True  # будет работать с tqdm
+        show_progress_bar=True
     )
 
     if not force_rebuild:
@@ -59,27 +68,33 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
         except Exception as e:
             print(f"[WARN] Ошибка загрузки базы: {e}")
 
-    # Если нужно пересоздать или база повреждена
+    # Удалим старую базу, если нужно
     if force_rebuild and os.path.exists(persist_dir):
         shutil.rmtree(persist_dir, ignore_errors=True)
-
     os.makedirs(persist_dir, exist_ok=True)
 
-    # Обработка PDF
+    # Шаг 1: загрузка и разбивка PDF
     docs = parse_pdfs(pdf_dir)
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
     print(f"[INFO] Разбито на {len(chunks)} чанков")
 
-    # Прогресс загрузки
-    print("[INFO] Начинаем загрузку векторов в Chroma...")
-    vectordb = Chroma.from_documents(
-        documents=tqdm(chunks, desc="Embedding documents"),
-        embedding=embeddings,
-        persist_directory=persist_dir
+    # Шаг 2: создаём пустую базу
+    vectordb = Chroma(
+        persist_directory=persist_dir,
+        embedding_function=embeddings
     )
 
-    # Принудительная задержка между batch запросами будет автоматом, т.к. OpenAIEmbeddings с batch_size сам обрабатывает
-    # Но если нужна ручная — можно переопределить метод embed_documents вручную
+    # Шаг 3: загружаем батчами
+    batch_size = 64
+    for i in tqdm(range(0, len(chunks), batch_size), desc="⬆️ Загрузка в Chroma"):
+        chunk_batch = chunks[i:i + batch_size]
+        try:
+            vectordb.add_documents(chunk_batch)
+            vectordb.persist()
+            time.sleep(0.5)  # защита от перегрузки API
+        except Exception as e:
+            print(f"[ERROR] Ошибка при загрузке батча {i // batch_size + 1}: {e}")
 
+    print("[SUCCESS] Все чанки успешно сохранены в векторную базу.")
     return vectordb
