@@ -35,7 +35,7 @@ def main():
 
     with st.spinner("🔄 Загрузка векторной базы..."):
         try:
-            vectordb = get_or_create_vectorstore(force_rebuild=False)
+            vectordb = get_or_create_vectorstore()
             all_documents = list_documents(vectordb)
 
             if not all_documents:

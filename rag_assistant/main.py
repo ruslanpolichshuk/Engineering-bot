@@ -6,11 +6,10 @@ from rag_assistant.utils import get_or_create_vectorstore_incremental as utils_g
 from rag_assistant import config
 from langchain.prompts import PromptTemplate
 
-def get_or_create_vectorstore(force_rebuild: bool = False):
+def get_or_create_vectorstore():
     vectordb = utils_get_vectorstore(
         pdf_dir=config.PDF_DIR,
-        persist_dir=config.VECTORDB_DIR,
-        force_rebuild=force_rebuild
+        persist_dir=config.VECTORDB_DIR
     )
     print("[INFO] Векторная база успешно загружена или создана.")
     return vectordb
