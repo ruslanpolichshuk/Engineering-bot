@@ -91,7 +91,6 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
             chunk_batch = chunks[j:j + 32]
             try:
                 vectordb.add_documents(chunk_batch)
-                vectordb.persist()
                 time.sleep(0.5)
             except Exception as e:
                 print(f"[ERROR] Ошибка при загрузке чанков: {e}")
