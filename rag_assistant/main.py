@@ -6,73 +6,79 @@ from rag_assistant.utils import get_or_create_vectorstore as utils_get_vectorsto
 from rag_assistant import config
 from langchain.prompts import PromptTemplate
 
+
 def get_or_create_vectorstore(force_rebuild: bool = False):
-    return utils_get_vectorstore(
+    vectordb = utils_get_vectorstore(
         pdf_dir=config.PDF_DIR,
         persist_dir=config.VECTORDB_DIR,
         force_rebuild=force_rebuild
     )
+    print("[INFO] Векторная база успешно загружена или создана.")
+    return vectordb
+
 
 def create_qa_chain(vectordb: Chroma):
     """
-    Создает улучшенную цепочку RetrievalQA с правильной обработкой контекста
+    Создает RetrievalQA цепочку с улучшенным промптом и настройками
     """
 
     retriever = vectordb.as_retriever(
-        search_type="mmr",  # Используем Maximal Marginal Relevance
+        search_type="mmr",
         search_kwargs={
-            "k": 10,  # Увеличиваем количество документов
-            "score_threshold": 0.4,  # Более мягкий порог релевантности
-            "fetch_k": 30  # Больший пул для MMR
+            "k": 10,
+            "score_threshold": 0.4,
+            "fetch_k": 30
         }
     )
-    
+
     llm = ChatOpenAI(
         model_name="gpt-4o",
-        temperature=0,  # Для более точных ответов
+        temperature=0,
         openai_api_key=config.API_KEY
     )
-    
-    # Улучшенный промпт для ответов
+
     QA_PROMPT = """Ты - эксперт по строительным нормам. Ответь на вопрос, используя ТОЛЬКО предоставленные фрагменты документов. 
-    Даже если информация неполная, сформулируй ответ на основе того, что есть.
-    
-    Контекст:
-    {context}
-    
-    Вопрос: {question}
-    
-    Ответ должен содержать: 
-    1. Четкий ответ на вопрос
-    2. Номера пунктов нормативов (если есть)
-    3. Различия между типами конструкций (если упоминаются)
-    4. Имя источника и точные данные из документов. Имя источника - название документа (СН РК Х.ХХ-ХХ-ХХХХ) 
-    
-    Ответ:
-    Развернутый ответ:
-    Источники:"""
-    
+Даже если информация неполная, сформулируй ответ на основе того, что есть.
+
+Контекст:
+{context}
+
+Вопрос: {question}
+
+Ответ должен содержать: 
+1. Четкий ответ на вопрос
+2. Номера пунктов нормативов (если есть)
+3. Различия между типами конструкций (если упоминаются)
+4. Имя источника и точные данные из документов. Имя источника - название документа (СН РК Х.ХХ-ХХ-ХХХХ) 
+
+Ответ:
+Развернутый ответ:
+Источники:"""
+
     prompt = PromptTemplate(
         template=QA_PROMPT,
         input_variables=["context", "question"]
     )
-    
+
+    print("[INFO] Создаём цепочку QA...")
     qa_chain = RetrievalQA.from_chain_type(
-        llm=ChatOpenAI(model="gpt-4o", temperature=0),
-        retriever=vectordb.as_retriever(search_kwargs={"k": 15}),
+        llm=llm,
+        retriever=retriever,
         chain_type="stuff",
         return_source_documents=True,
         chain_type_kwargs={"prompt": prompt}
     )
+
+    print("[INFO] QA-цепочка успешно создана.")
     return qa_chain
 
 
-# В main.py обновите list_documents:
 def list_documents(vectordb) -> list[str]:
     try:
-        # Новый способ получения источников
         collection = vectordb.get()
-        sources = list({m['source'] for m in collection['metadatas'] if 'source' in m})
+        metadatas = collection.get("metadatas", [])
+        sources = list({m['source'] for m in metadatas if isinstance(m, dict) and 'source' in m})
+        print(f"[INFO] Получено {len(sources)} уникальных документов.")
         return sorted(sources)
     except Exception as e:
         print(f"[ERROR] list_documents: {str(e)}")
