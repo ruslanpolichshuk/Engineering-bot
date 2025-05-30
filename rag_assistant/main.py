@@ -2,7 +2,7 @@ import os
 from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import Chroma
 from langchain.chains import RetrievalQA
-from rag_assistant.utils import get_or_create_vectorstore as utils_get_vectorstore
+from rag_assistant.utils import get_or_create_vectorstore_incremental as utils_get_vectorstore
 from rag_assistant import config
 from langchain.prompts import PromptTemplate
 
