@@ -58,6 +58,7 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
         embedding_function=embeddings
     )
 
+    # --- Получаем уже добавленные PDF-файлы ---
     existing_files = set()
     try:
         existing_metadatas = vectordb.get()["metadatas"]
@@ -69,10 +70,9 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
 
     print(f"[INFO] В базе уже есть {len(existing_files)} документов.")
 
-    new_pdfs = [
-        f for f in os.listdir(pdf_dir)
-        if f.lower().endswith(".pdf") and f not in existing_files
-    ]
+    # --- Определяем новые PDF-файлы ---
+    all_pdfs = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+    new_pdfs = [f for f in all_pdfs if f not in existing_files]
 
     if not new_pdfs:
         print("[INFO] Новых PDF-файлов не найдено. База не обновлена.")
@@ -80,14 +80,18 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
 
     print(f"[INFO] Найдено новых PDF: {len(new_pdfs)}")
 
+    # --- Загружаем и парсим новые PDF-файлы ---
     docs: list[Document] = []
     for fname in new_pdfs:
         try:
             path = os.path.join(pdf_dir, fname)
+            print(f"[LOAD] Чтение файла {fname}")
             with pdfplumber.open(path) as pdf:
+                print(f"[DEBUG] Всего страниц в {fname}: {len(pdf.pages)}")
                 for i, page in enumerate(pdf.pages):
                     text = page.extract_text()
                     if not text or len(text.strip()) < 20:
+                        print(f"[WARN] Страница {i+1} пустая или слишком короткая.")
                         continue
                     meta = {'source': fname, 'page': i + 1}
                     docs.append(Document(page_content=text, metadata=meta))
@@ -100,10 +104,12 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
         print("[WARN] Нет валидных страниц для добавления.")
         return vectordb
 
+    # --- Разбиваем на чанки ---
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
     chunks = splitter.split_documents(docs)
     print(f"[INFO] Чанков для добавления: {len(chunks)}")
 
+    # --- Добавляем чанки батчами ---
     batch_size = 64
     for i in tqdm(range(0, len(chunks), batch_size), desc="📥 Добавление новых чанков"):
         batch = chunks[i:i + batch_size]
