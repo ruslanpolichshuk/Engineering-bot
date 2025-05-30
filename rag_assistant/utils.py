@@ -1,32 +1,32 @@
+import logging
+logging.getLogger("pdfminer").setLevel(logging.ERROR)
 import os
 import time
 import shutil
-import pdfplumber
+from tqdm import tqdm
 from retrying import retry
+import pdfplumber
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
+from langchain_chroma import Chroma
 from pdfminer.pdfparser import PDFSyntaxError
 from rag_assistant import config
 
 
 def parse_pdfs(pdf_dir: str) -> list[Document]:
     docs: list[Document] = []
-    all_files = os.listdir(pdf_dir)
-    pdf_files = [f for f in all_files if f.lower().endswith('.pdf')]
-
-    print(f"[INFO] Всего PDF-файлов к обработке: {len(pdf_files)}")
-
-    for fname in pdf_files:
+    for fname in os.listdir(pdf_dir):
+        if not fname.lower().endswith('.pdf'):
+            continue
         path = os.path.join(pdf_dir, fname)
         try:
-            print(f"[LOAD] Открываем: {fname}")
+            print(f"[LOAD] Загружаем PDF: {fname}")
             with pdfplumber.open(path) as pdf:
                 for i, page in enumerate(pdf.pages):
                     text = page.extract_text()
-                    if not text or len(text.strip()) < 20:
-                        print(f"[WARN] Пустая/короткая страница {i+1} в {fname}")
+                    if not text:
+                        print(f"[WARN] Пустая страница {i+1} в {fname}")
                         continue
                     meta = {'source': fname, 'page': i + 1}
                     docs.append(Document(page_content=text, metadata=meta))
@@ -34,8 +34,7 @@ def parse_pdfs(pdf_dir: str) -> list[Document]:
             print(f"[ERROR] Повреждён PDF: {fname}")
         except Exception as e:
             print(f"[ERROR] Ошибка с {fname}: {e}")
-
-    print(f"[RESULT] Загружено {len(docs)} страниц из {len(pdf_files)} PDF-файлов")
+    print(f"[RESULT] Загружено {len(docs)} страниц из {len(os.listdir(pdf_dir))} PDF-файлов")
     return docs
 
 
@@ -43,8 +42,9 @@ def parse_pdfs(pdf_dir: str) -> list[Document]:
 def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
     embeddings = OpenAIEmbeddings(
         model="text-embedding-ada-002",
-        batch_size=16,           # ✅ batch вместо одного запроса
-        request_timeout=60       # ✅ чуть выше таймаут на всякий случай
+        batch_size=64,
+        request_timeout=60,
+        show_progress_bar=True  # будет работать с tqdm
     )
 
     if not force_rebuild:
@@ -53,50 +53,33 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
                 persist_directory=persist_dir,
                 embedding_function=embeddings
             )
-            count = vectordb._collection.count()
-            print(f"[INFO] Найдено {count} векторов в существующей базе")
-            if count > 0:
+            if vectordb._collection.count() > 0:
+                print("[INFO] Загружена существующая база векторов.")
                 return vectordb
         except Exception as e:
-            print(f"[WARN] Ошибка подключения к существующей базе: {e}")
+            print(f"[WARN] Ошибка загрузки базы: {e}")
 
-    # Пересоздание базы
-    for attempt in range(3):
-        try:
-            if force_rebuild:
-                print(f"[INFO] Пересоздание базы. Удаляем {persist_dir}")
-                if os.path.exists(persist_dir):
-                    shutil.rmtree(persist_dir, ignore_errors=True)
+    # Если нужно пересоздать или база повреждена
+    if force_rebuild and os.path.exists(persist_dir):
+        shutil.rmtree(persist_dir, ignore_errors=True)
 
-            os.makedirs(persist_dir, exist_ok=True)
+    os.makedirs(persist_dir, exist_ok=True)
 
-            print("[INFO] Загружаем документы...")
-            docs = parse_pdfs(pdf_dir)
-            if not docs:
-                raise ValueError("❌ Ни одного валидного PDF-документа не загружено.")
+    # Обработка PDF
+    docs = parse_pdfs(pdf_dir)
+    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
+    chunks = splitter.split_documents(docs)
+    print(f"[INFO] Разбито на {len(chunks)} чанков")
 
-            print("[INFO] Разбиваем на чанки...")
-            splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)
-            chunks = splitter.split_documents(docs)
-            print(f"[INFO] Всего чанков для эмбеддинга: {len(chunks)}")
+    # Прогресс загрузки
+    print("[INFO] Начинаем загрузку векторов в Chroma...")
+    vectordb = Chroma.from_documents(
+        documents=tqdm(chunks, desc="Embedding documents"),
+        embedding=embeddings,
+        persist_directory=persist_dir
+    )
 
-            print("[INFO] Начинаем построение векторной базы...")
-            vectordb = Chroma.from_documents(
-                documents=chunks,
-                embedding=embeddings,
-                persist_directory=persist_dir
-            )
-            print("[SUCCESS] Векторная база успешно создана и сохранена.")
-            return vectordb
+    # Принудительная задержка между batch запросами будет автоматом, т.к. OpenAIEmbeddings с batch_size сам обрабатывает
+    # Но если нужна ручная — можно переопределить метод embed_documents вручную
 
-        except PermissionError as e:
-            print(f"[RETRY] PermissionError: {e}")
-            if attempt == 2:
-                raise
-            time.sleep(1)
-
-        except Exception as e:
-            print(f"[ERROR] Ошибка при создании базы: {e}")
-            if attempt == 2:
-                raise
-            time.sleep(1)
+    return vectordb
