@@ -4,7 +4,8 @@ sys.modules["sqlite3"] = pysqlite3
 
 import os
 import streamlit as st
-from rag_assistant.main import get_or_create_vectorstore, list_documents, create_qa_chain
+from rag_assistant.main import get_or_create_vectorstore, list_documents
+from rag_assistant.self_rag import run_self_rag
 from rag_assistant import config
 import logging
 
@@ -69,23 +70,43 @@ def main():
     question = st.text_input("Введите вопрос:")
 
     if question.strip():
-        with st.spinner("🔎 Обработка запроса..."):
+        with st.spinner("🔎 Обработка запроса (Self-RAG)..."):
             try:
-                qa_chain = create_qa_chain(
+                selected_doc = selected if selected != "Все документы" else None
+                result = run_self_rag(
+                    question=question,
                     vectordb=st.session_state["vectordb"],
-                    selected_document=selected if selected != "Все документы" else None
+                    selected_document=selected_doc,
+                    model_name="gpt-4o",
                 )
-                result = qa_chain({"query": question})
-                answer = result.get("result", "")
 
-                if "нет информации" in answer.lower():
-                    st.warning("🤔 Точного ответа не найдено. Вот фрагменты, которые могут быть полезны:")
-                    for doc in result.get("source_documents", []):
-                        st.write(f"📄 {doc.metadata['source']}, стр. {doc.metadata['page']}:")
-                        st.text(doc.page_content[:500] + "...")
-                else:
-                    st.markdown("### 🧠 Ответ:")
-                    st.write(answer)
+                st.markdown("### 🧠 Ответ:")
+                st.write(result.get("answer", ""))
+
+                # Critique block
+                critique = result.get("critique", {})
+                with st.expander("🧪 Критика и уверенность модели"):
+                    st.write({
+                        "used_retrieval": result.get("used_retrieval"),
+                        "retrieve_reason": result.get("retrieve_reason"),
+                        "confidence": result.get("confidence"),
+                        "critique": critique,
+                    })
+
+                # Citations and snippets
+                citations = result.get("citations", [])
+                citation_meta = {c["doc_id"]: c for c in result.get("citation_meta", [])}
+                if citations:
+                    st.markdown("### 📚 Источники")
+                    for c in citations:
+                        did = c.get("doc_id")
+                        meta = citation_meta.get(did, {})
+                        source = meta.get("source", "")
+                        page = meta.get("page", "")
+                        st.write(f"[{did}] {source}, стр. {page}")
+                        quote = c.get("quote", "")
+                        if quote:
+                            st.text(quote)
 
             except Exception as e:
                 st.error(f"❌ Ошибка при обработке запроса: {str(e)}")
