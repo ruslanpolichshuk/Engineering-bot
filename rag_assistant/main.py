@@ -4,6 +4,8 @@ from langchain_community.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from rag_assistant.utils import get_or_create_vectorstore_incremental as utils_get_vectorstore
 from rag_assistant import config
+from rag_assistant.knowledge_graph import KnowledgeGraphBuilder
+from rag_assistant.kg_retriever import KnowledgeGraphRetriever
 from langchain.prompts import PromptTemplate
 from typing import List, Dict, Set
 
@@ -37,16 +39,44 @@ def get_or_create_vectorstore():
     print("[INFO] Векторная база успешно загружена или создана.")
     return vectordb
 
-def create_qa_chain(vectordb: Chroma, selected_document: str = None):
+def get_or_create_knowledge_graph():
+    """Get or create knowledge graph builder"""
+    if not config.USE_KNOWLEDGE_GRAPH:
+        return None
+    
+    try:
+        kg_builder = KnowledgeGraphBuilder()
+        print("[INFO] Граф знаний успешно загружен или создан.")
+        return kg_builder
+    except Exception as e:
+        print(f"[ERROR] Ошибка при работе с графом знаний: {e}")
+        return None
+
+def get_enhanced_retriever(vectordb: Chroma, kg_builder: KnowledgeGraphBuilder = None):
+    """Get enhanced retriever with knowledge graph support"""
+    if kg_builder and config.USE_KNOWLEDGE_GRAPH:
+        return KnowledgeGraphRetriever(vectordb, kg_builder)
+    else:
+        # Fallback to regular retriever
+        return vectordb.as_retriever(
+            search_type="mmr",
+            search_kwargs={
+                "k": config.SELF_RAG_SEARCH_K,
+                "fetch_k": config.SELF_RAG_FETCH_K,
+                "score_threshold": config.SELF_RAG_SCORE_THRESHOLD
+            }
+        )
+
+def create_qa_chain(vectordb: Chroma, selected_document: str = None, kg_builder: KnowledgeGraphBuilder = None):
     """
     Создает RetrievalQA цепочку с улучшенным промптом и настройками,
     при необходимости ограничивает поиск одним документом
     """
 
     search_kwargs = {
-        "k": 10,
-        "score_threshold": 0.4,
-        "fetch_k": 30
+        "k": config.SELF_RAG_SEARCH_K,
+        "score_threshold": config.SELF_RAG_SCORE_THRESHOLD,
+        "fetch_k": config.SELF_RAG_FETCH_K
     }
 
     if selected_document and selected_document != "Все документы":
@@ -54,18 +84,16 @@ def create_qa_chain(vectordb: Chroma, selected_document: str = None):
         # Для Chroma используем metadata-фильтр по точному совпадению источника
         search_kwargs["filter"] = {"source": selected_document}
 
-    retriever = vectordb.as_retriever(
-        search_type="mmr",
-        search_kwargs=search_kwargs
-    )
+    # Use enhanced retriever if knowledge graph is available
+    retriever = get_enhanced_retriever(vectordb, kg_builder)
 
     llm = ChatOpenAI(
-        model_name="gpt-4o",
-        temperature=0,
+        model_name=config.SELF_RAG_MODEL,  # Now using GPT-5
+        temperature=config.SELF_RAG_TEMPERATURE,
         openai_api_key=config.API_KEY
     )
 
-    QA_PROMPT = """Ты - эксперт по строительным нормам. Ответь на вопрос, используя ТОЛЬКО предоставленные фрагменты документов. 
+    QA_PROMPT = """Ты - эксперт по строительным нормам Республики Казахстан. Ответь на вопрос, используя ТОЛЬКО предоставленные фрагменты документов. 
 Даже если информация неполная, сформулируй ответ на основе того, что есть.
 
 ВАЖНО: В разделе "Источники" указывай ТОЛЬКО реальные источники из контекста. НЕ выдумывай названия документов или номера страниц.
@@ -80,6 +108,7 @@ def create_qa_chain(vectordb: Chroma, selected_document: str = None):
 2. Номера пунктов нормативов (если есть в контексте)
 3. Различия между типами конструкций (если упоминаются)
 4. Точные данные из предоставленных фрагментов
+5. Использование контекста из базы знаний (если доступен)
 
 Ответ:
 Развернутый ответ:
@@ -90,7 +119,7 @@ def create_qa_chain(vectordb: Chroma, selected_document: str = None):
         input_variables=["context", "question"]
     )
 
-    print("[INFO] Создаём цепочку QA...")
+    print("[INFO] Создаём цепочку QA с GPT-5...")
     qa_chain = RetrievalQA.from_chain_type(
         llm=llm,
         retriever=retriever,
