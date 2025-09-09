@@ -14,6 +14,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from pdfminer.pdfparser import PDFSyntaxError
 from rag_assistant import config
+from rag_assistant.knowledge_graph import KnowledgeGraphBuilder
 
 def parse_pdf_file(path: str, fname: str) -> list[Document]:
     docs = []
@@ -88,6 +89,7 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
     batch_size = 7
     total_docs = 0
     total_chunks = 0
+    all_documents = []  # Store all documents for knowledge graph
 
     for i in range(0, len(new_pdfs), batch_size):
         batch_files = new_pdfs[i:i + batch_size]
@@ -100,6 +102,7 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
 
         print(f"[INFO] Загружено страниц из батча: {len(docs)}")
         total_docs += len(docs)
+        all_documents.extend(docs)  # Add to all documents
 
         if not docs:
             continue
@@ -121,4 +124,15 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
         gc.collect()
 
     print(f"[SUCCESS] Загружено всего {total_docs} страниц, {total_chunks} чанков")
+    
+    # Build knowledge graph if enabled
+    if config.USE_KNOWLEDGE_GRAPH and all_documents:
+        print("[INFO] Строим граф знаний...")
+        try:
+            kg_builder = KnowledgeGraphBuilder()
+            kg_builder.build_from_documents(all_documents, recreate=config.RECREATE)
+            print("[SUCCESS] Граф знаний построен успешно")
+        except Exception as e:
+            print(f"[ERROR] Ошибка при построении графа знаний: {e}")
+    
     return vectordb

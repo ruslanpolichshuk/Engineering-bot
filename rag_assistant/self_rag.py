@@ -111,7 +111,7 @@ def _uniq_documents(documents: List[Document], limit: int) -> List[Document]:
 
 def run_self_rag(vectordb, question: str, selected_document: Optional[str] = None) -> Dict:
     llm = ChatOpenAI(
-        model_name=getattr(config, "SELF_RAG_MODEL", "gpt-4o-mini"),
+        model_name=getattr(config, "SELF_RAG_MODEL", "gpt-5"),
         temperature=getattr(config, "SELF_RAG_TEMPERATURE", 0),
         openai_api_key=config.API_KEY,
     )
