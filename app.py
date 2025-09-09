@@ -2,6 +2,7 @@ import os
 import streamlit as st
 from rag_assistant.main import get_or_create_vectorstore, list_documents, create_qa_chain, extract_accurate_sources
 from rag_assistant.self_rag import run_self_rag
+from rag_assistant.self_rag_langgraph import run_self_rag_langgraph
 from rag_assistant import config
 import logging
 
@@ -65,14 +66,52 @@ def main():
         index=0,
         )
     with col2:
-        use_self_rag = st.toggle("Self-RAG", value=True, help="Включить самокритику и адаптивный поиск (Self-RAG)")
+        rag_mode = st.selectbox(
+            "Режим RAG:",
+            options=["Обычный RAG", "Self-RAG (старый)", "Self-RAG LangGraph (новый)"],
+            index=2,
+            help="Выберите режим работы системы"
+        )
 
     question = st.text_input("Введите вопрос:")
 
     if question.strip():
         with st.spinner("🔎 Обработка запроса..."):
             try:
-                if use_self_rag:
+                if rag_mode == "Self-RAG LangGraph (новый)":
+                    # Use new LangGraph-based Self-RAG
+                    flow = run_self_rag_langgraph(
+                        st.session_state["vectordb"],
+                        question=question,
+                        selected_document=selected if selected != "Все документы" else None,
+                    )
+                    answer = flow.get("final_answer", "")
+                    accuracy = flow.get("accuracy_percentage", 0.0)
+                    retrieve_decision = flow.get("retrieve_decision", "")
+                    relevance_scores = flow.get("relevance_scores", {})
+                    support_scores = flow.get("support_scores", {})
+                    usefulness_scores = flow.get("usefulness_scores", {})
+
+                    st.markdown("### 🧠 Ответ:")
+                    st.write(answer)
+
+                    with st.expander("🔎 Подробности Self-RAG LangGraph"):
+                        st.write(f"**Решение о поиске:** {retrieve_decision}")
+                        st.write(f"**Оценки релевантности:** {relevance_scores}")
+                        st.write(f"**Оценки поддержки:** {support_scores}")
+                        st.write(f"**Оценки полезности:** {usefulness_scores}")
+                        st.write(f"**Исходная генерация:** {flow.get('generation', '')}")
+
+                    src_docs = flow.get("source_documents", [])
+                    if src_docs:
+                        st.markdown("### 📚 Использованные фрагменты:")
+                        accurate_sources = extract_accurate_sources(src_docs)
+                        for source_info in accurate_sources:
+                            st.write(f"📄 **{source_info['source']}**, стр. {source_info['page']}:")
+                            st.text(source_info['content_preview'])
+                            
+                elif rag_mode == "Self-RAG (старый)":
+                    # Use old Self-RAG implementation
                     flow = run_self_rag(
                         st.session_state["vectordb"],
                         question=question,
@@ -97,7 +136,8 @@ def main():
                         for source_info in accurate_sources:
                             st.write(f"📄 **{source_info['source']}**, стр. {source_info['page']}:")
                             st.text(source_info['content_preview'])
-                else:
+                            
+                else:  # Обычный RAG
                     qa_chain = create_qa_chain(
                         vectordb=st.session_state["vectordb"],
                         selected_document=selected if selected != "Все документы" else None
