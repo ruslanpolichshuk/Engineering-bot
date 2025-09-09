@@ -46,21 +46,42 @@ def get_or_create_vectorstore_incremental(pdf_dir, persist_dir):
         embedding_function=embeddings
     )
 
-    # Определяем уже загруженные документы
+    # Проверяем, существует ли векторная база и содержит ли она документы
     existing_files = set()
+    total_documents = 0
     try:
-        for m in vectordb.get()["metadatas"]:
+        collection_data = vectordb.get()
+        metadatas = collection_data.get("metadatas", [])
+        total_documents = len(metadatas)
+        
+        for m in metadatas:
             if isinstance(m, dict) and "source" in m:
                 existing_files.add(m["source"])
+        
+        print(f"[INFO] Векторная база содержит {total_documents} документов из {len(existing_files)} файлов")
+        print(f"[INFO] Загруженные файлы: {sorted(existing_files)}")
+        
     except Exception as e:
         print(f"[WARN] Не удалось получить список загруженных PDF: {e}")
+        print(f"[INFO] Создаем новую векторную базу")
+
+    # Проверяем наличие PDF файлов в директории
+    if not os.path.exists(pdf_dir):
+        print(f"[WARN] Директория {pdf_dir} не существует. Создаем...")
+        os.makedirs(pdf_dir, exist_ok=True)
+        return vectordb
 
     all_pdfs = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
     new_pdfs = [f for f in all_pdfs if f not in existing_files]
-    print(f"[INFO] Всего новых PDF: {len(new_pdfs)}")
+    
+    print(f"[INFO] Всего PDF в директории: {len(all_pdfs)}")
+    print(f"[INFO] Новых PDF для обработки: {len(new_pdfs)}")
 
     if not new_pdfs:
-        print("[INFO] Новых PDF не найдено. Пропускаем обновление базы.")
+        if total_documents > 0:
+            print("[INFO] Новых PDF не найдено. Используем существующую векторную базу.")
+        else:
+            print("[WARN] Векторная база пуста и новых PDF не найдено!")
         return vectordb
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100)

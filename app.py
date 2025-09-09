@@ -1,6 +1,6 @@
 import os
 import streamlit as st
-from rag_assistant.main import get_or_create_vectorstore, list_documents, create_qa_chain
+from rag_assistant.main import get_or_create_vectorstore, list_documents, create_qa_chain, extract_accurate_sources
 from rag_assistant.self_rag import run_self_rag
 from rag_assistant import config
 import logging
@@ -93,9 +93,10 @@ def main():
                     src_docs = flow.get("source_documents", [])
                     if src_docs:
                         st.markdown("### 📚 Использованные фрагменты:")
-                        for doc in src_docs:
-                            st.write(f"📄 {doc.metadata.get('source','?')}, стр. {doc.metadata.get('page','?')}:")
-                            st.text(doc.page_content[:500] + "...")
+                        accurate_sources = extract_accurate_sources(src_docs)
+                        for source_info in accurate_sources:
+                            st.write(f"📄 **{source_info['source']}**, стр. {source_info['page']}:")
+                            st.text(source_info['content_preview'])
                 else:
                     qa_chain = create_qa_chain(
                         vectordb=st.session_state["vectordb"],
@@ -106,12 +107,24 @@ def main():
 
                     if "нет информации" in answer.lower():
                         st.warning("🤔 Точного ответа не найдено. Вот фрагменты, которые могут быть полезны:")
-                        for doc in result.get("source_documents", []):
-                            st.write(f"📄 {doc.metadata['source']}, стр. {doc.metadata['page']}:")
-                            st.text(doc.page_content[:500] + "...")
+                        src_docs = result.get("source_documents", [])
+                        if src_docs:
+                            accurate_sources = extract_accurate_sources(src_docs)
+                            for source_info in accurate_sources:
+                                st.write(f"📄 **{source_info['source']}**, стр. {source_info['page']}:")
+                                st.text(source_info['content_preview'])
                     else:
                         st.markdown("### 🧠 Ответ:")
                         st.write(answer)
+                        
+                        # Show accurate sources for regular RAG too
+                        src_docs = result.get("source_documents", [])
+                        if src_docs:
+                            st.markdown("### 📚 Использованные фрагменты:")
+                            accurate_sources = extract_accurate_sources(src_docs)
+                            for source_info in accurate_sources:
+                                st.write(f"📄 **{source_info['source']}**, стр. {source_info['page']}:")
+                                st.text(source_info['content_preview'])
 
             except Exception as e:
                 st.error(f"❌ Ошибка при обработке запроса: {str(e)}")

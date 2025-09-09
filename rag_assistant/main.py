@@ -5,6 +5,29 @@ from langchain.chains import RetrievalQA
 from rag_assistant.utils import get_or_create_vectorstore_incremental as utils_get_vectorstore
 from rag_assistant import config
 from langchain.prompts import PromptTemplate
+from typing import List, Dict, Set
+
+def extract_accurate_sources(source_documents) -> List[Dict[str, str]]:
+    """
+    Извлекает точные источники из документов без галлюцинаций
+    """
+    sources = []
+    seen_sources = set()
+    
+    for doc in source_documents:
+        source = doc.metadata.get('source', 'неизвестный источник')
+        page = doc.metadata.get('page', '?')
+        source_key = f"{source}_page_{page}"
+        
+        if source_key not in seen_sources:
+            sources.append({
+                'source': source,
+                'page': page,
+                'content_preview': doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
+            })
+            seen_sources.add(source_key)
+    
+    return sources
 
 def get_or_create_vectorstore():
     vectordb = utils_get_vectorstore(
@@ -45,6 +68,8 @@ def create_qa_chain(vectordb: Chroma, selected_document: str = None):
     QA_PROMPT = """Ты - эксперт по строительным нормам. Ответь на вопрос, используя ТОЛЬКО предоставленные фрагменты документов. 
 Даже если информация неполная, сформулируй ответ на основе того, что есть.
 
+ВАЖНО: В разделе "Источники" указывай ТОЛЬКО реальные источники из контекста. НЕ выдумывай названия документов или номера страниц.
+
 Контекст:
 {context}
 
@@ -52,13 +77,13 @@ def create_qa_chain(vectordb: Chroma, selected_document: str = None):
 
 Ответ должен содержать: 
 1. Четкий ответ на вопрос
-2. Номера пунктов нормативов (если есть)
+2. Номера пунктов нормативов (если есть в контексте)
 3. Различия между типами конструкций (если упоминаются)
-4. Имя источника и точные данные из документов. Имя источника - название документа (СН РК Х.ХХ-ХХ-ХХХХ) 
+4. Точные данные из предоставленных фрагментов
 
 Ответ:
 Развернутый ответ:
-Источники:"""
+Источники: (укажи ТОЛЬКО реальные источники из контекста выше)"""
 
     prompt = PromptTemplate(
         template=QA_PROMPT,

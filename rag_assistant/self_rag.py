@@ -28,10 +28,10 @@ def _build_retriever(vectordb, selected_document: Optional[str] = None):
 def _format_context(documents: List[Document], max_chars: int = 12000) -> str:
     parts: List[str] = []
     current_len = 0
-    for doc in documents:
+    for i, doc in enumerate(documents, 1):
         source = doc.metadata.get("source", "неизвестный источник")
         page = doc.metadata.get("page", "?")
-        header = f"Источник: {source}, стр. {page}"
+        header = f"[ФРАГМЕНТ {i}] Источник: {source}, стр. {page}"
         chunk = f"{header}\n{doc.page_content.strip()}"
         if current_len + len(chunk) > max_chars:
             break
@@ -144,16 +144,17 @@ def run_self_rag(vectordb, question: str, selected_document: Optional[str] = Non
         template=(
             "Ты - эксперт по строительным нормам. Ответь на вопрос, используя ТОЛЬКО предоставленные фрагменты документов.\n"
             "Даже если информация неполная, сформулируй ответ на основе того, что есть.\n\n"
+            "ВАЖНО: В разделе 'Источники' указывай ТОЛЬКО реальные источники из контекста. НЕ выдумывай названия документов или номера страниц.\n\n"
             "Контекст:\n{context}\n\n"
             "Вопрос: {question}\n\n"
             "Ответ должен содержать:\n"
             "1. Четкий ответ на вопрос\n"
-            "2. Номера пунктов нормативов (если есть)\n"
+            "2. Номера пунктов нормативов (если есть в контексте)\n"
             "3. Различия между типами конструкций (если упоминаются)\n"
-            "4. Имя источника и точные данные из документов. Имя источника - название документа (СН РК Х.ХХ-ХХ-ХХХХ)\n\n"
+            "4. Точные данные из предоставленных фрагментов\n\n"
             "Ответ:\n"
             "Развернутый ответ:\n"
-            "Источники:"
+            "Источники: (укажи ТОЛЬКО реальные источники из контекста выше)"
         ),
         input_variables=["context", "question"],
     )
