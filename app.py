@@ -5,6 +5,7 @@ sys.modules["sqlite3"] = pysqlite3
 import os
 import streamlit as st
 from rag_assistant.main import get_or_create_vectorstore, list_documents, create_qa_chain
+from rag_assistant.self_rag import run_self_rag
 from rag_assistant import config
 import logging
 
@@ -60,32 +61,61 @@ def main():
         for doc_name in st.session_state["all_documents"]:
             st.write(f"• {doc_name}")
 
-    selected = st.selectbox(
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        selected = st.selectbox(
         "🔍 Ограничить вопрос одним документом (по названию):",
         options=["Все документы"] + st.session_state["all_documents"],
         index=0,
-    )
+        )
+    with col2:
+        use_self_rag = st.toggle("Self-RAG", value=True, help="Включить самокритику и адаптивный поиск (Self-RAG)")
 
     question = st.text_input("Введите вопрос:")
 
     if question.strip():
         with st.spinner("🔎 Обработка запроса..."):
             try:
-                qa_chain = create_qa_chain(
-                    vectordb=st.session_state["vectordb"],
-                    selected_document=selected if selected != "Все документы" else None
-                )
-                result = qa_chain({"query": question})
-                answer = result.get("result", "")
+                if use_self_rag:
+                    flow = run_self_rag(
+                        st.session_state["vectordb"],
+                        question=question,
+                        selected_document=selected if selected != "Все документы" else None,
+                    )
+                    answer = flow.get("final_answer", "")
+                    decision = flow.get("decision", {})
+                    critique = flow.get("critique", {})
 
-                if "нет информации" in answer.lower():
-                    st.warning("🤔 Точного ответа не найдено. Вот фрагменты, которые могут быть полезны:")
-                    for doc in result.get("source_documents", []):
-                        st.write(f"📄 {doc.metadata['source']}, стр. {doc.metadata['page']}:")
-                        st.text(doc.page_content[:500] + "...")
-                else:
                     st.markdown("### 🧠 Ответ:")
                     st.write(answer)
+
+                    with st.expander("🔎 Подробности Self-RAG"):
+                        st.write("Решение о необходимости поиска:", decision)
+                        st.write("Самокритика:", critique)
+                        st.write("Переформулированный запрос:", flow.get("reformulated_query", ""))
+
+                    src_docs = flow.get("source_documents", [])
+                    if src_docs:
+                        st.markdown("### 📚 Использованные фрагменты:")
+                        for doc in src_docs:
+                            st.write(f"📄 {doc.metadata.get('source','?')}, стр. {doc.metadata.get('page','?')}:")
+                            st.text(doc.page_content[:500] + "...")
+                else:
+                    qa_chain = create_qa_chain(
+                        vectordb=st.session_state["vectordb"],
+                        selected_document=selected if selected != "Все документы" else None
+                    )
+                    result = qa_chain({"query": question})
+                    answer = result.get("result", "")
+
+                    if "нет информации" in answer.lower():
+                        st.warning("🤔 Точного ответа не найдено. Вот фрагменты, которые могут быть полезны:")
+                        for doc in result.get("source_documents", []):
+                            st.write(f"📄 {doc.metadata['source']}, стр. {doc.metadata['page']}:")
+                            st.text(doc.page_content[:500] + "...")
+                    else:
+                        st.markdown("### 🧠 Ответ:")
+                        st.write(answer)
 
             except Exception as e:
                 st.error(f"❌ Ошибка при обработке запроса: {str(e)}")

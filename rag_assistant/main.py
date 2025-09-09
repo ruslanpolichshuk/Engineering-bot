@@ -28,7 +28,8 @@ def create_qa_chain(vectordb: Chroma, selected_document: str = None):
 
     if selected_document and selected_document != "Все документы":
         print(f"[INFO] Ограничиваем поиск документом: {selected_document}")
-        search_kwargs["filter"] = lambda doc: doc.metadata.get("source") == selected_document
+        # Для Chroma используем metadata-фильтр по точному совпадению источника
+        search_kwargs["filter"] = {"source": selected_document}
 
     retriever = vectordb.as_retriever(
         search_type="mmr",
