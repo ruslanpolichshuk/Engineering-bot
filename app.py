@@ -9,7 +9,11 @@ from langchain.chains import RetrievalQA
 from rag_assistant.main import get_or_create_vectorstore, list_documents, create_qa_chain
 from rag_assistant import config
 import logging
-logging.basicConfig(level=logging.DEBUG)
+# Отключаем DEBUG логи для всех библиотек, кроме наших важных сообщений
+logging.basicConfig(level=logging.WARNING)
+# Отключаем особенно шумные логи от pdfminer
+logging.getLogger('pdfminer').setLevel(logging.ERROR)
+logging.getLogger('pdfplumber').setLevel(logging.WARNING)
 
 # Должен быть ПЕРВЫМ вызовом в скрипте
 st.set_page_config(

@@ -136,6 +136,7 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
                 return vectordb
             
             # Improved chunking strategy for better retrieval accuracy
+            print(f"[INFO] Разбиваем документы на чанки...")
             splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000,  # Increased for better context
                 chunk_overlap=200,  # Increased overlap for continuity
@@ -145,12 +146,33 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
             chunks = splitter.split_documents(docs)
             print(f"[INFO] Создано {len(chunks)} чанков из {len(docs)} документов")
             
+            # Check disk space before creating embeddings
+            if os.path.exists(persist_dir):
+                import shutil
+                total, used, free = shutil.disk_usage(persist_dir)
+                print(f"[INFO] Дисковое пространство: использовано {used // (1024**2)} MB, свободно {free // (1024**2)} MB")
+            
+            print(f"[INFO] Генерация эмбеддингов через OpenAI API (это может занять несколько минут для {len(chunks)} чанков)...")
+            start_time = time.time()
             vectordb = Chroma.from_documents(
                 documents=chunks,
                 embedding=embeddings,
                 persist_directory=persist_dir
             )
-            print(f"[INFO] ✓ Векторная база успешно создана в {persist_dir}")
+            elapsed_time = time.time() - start_time
+            print(f"[INFO] ✓ Векторная база успешно создана в {persist_dir} (заняло {elapsed_time:.1f} секунд)")
+            
+            # Verify persistence and check disk usage
+            if os.path.exists(persist_dir):
+                dir_size = sum(os.path.getsize(os.path.join(dirpath, filename))
+                             for dirpath, dirnames, filenames in os.walk(persist_dir)
+                             for filename in filenames)
+                print(f"[INFO] Размер векторной базы на диске: {dir_size // (1024**2)} MB")
+                file_count = sum([len(files) for r, d, files in os.walk(persist_dir)])
+                print(f"[INFO] Количество файлов в базе: {file_count}")
+            else:
+                print(f"[WARN] Директория {persist_dir} не существует после создания базы!")
+            
             return vectordb
             
         except PermissionError as e:
