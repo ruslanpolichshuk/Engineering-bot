@@ -28,7 +28,7 @@ def create_qa_chain(vectordb: Chroma):
     )
     
     llm = ChatOpenAI(
-        model_name="gpt-4o",
+        model=model_name  # GPT-5.2-Pro for best accuracy,
         temperature=0,  # Для более точных ответов
         openai_api_key=config.API_KEY
     )
@@ -58,7 +58,7 @@ def create_qa_chain(vectordb: Chroma):
     )
     
     qa_chain = RetrievalQA.from_chain_type(
-        llm=ChatOpenAI(model="gpt-4o", temperature=0),
+        llm=llm, temperature=0),
         retriever=vectordb.as_retriever(search_kwargs={"k": 15}),
         chain_type="stuff",
         return_source_documents=True,
