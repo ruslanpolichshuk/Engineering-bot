@@ -23,25 +23,34 @@ st.set_page_config(
 
 st.title("Ассистент по строительным нормам РК")
 
+@st.cache_resource(ttl=3600)  # Кэшируем на 1 час
+def load_vectorstore():
+    """Загружает векторную базу с кэшированием"""
+    return get_or_create_vectorstore()
+
 def main():
     # Загрузка или создание векторной базы
-    with st.spinner("🔄 Загрузка векторной базы..."):
-        try:
-            vectordb = get_or_create_vectorstore()
-            all_documents = list_documents(vectordb)
-            
-            if not all_documents:
-                st.error("⚠️ В векторной базе нет документов! Проверьте:")
-                st.write(f"- Папку с PDF: {config.PDF_DIR}")
-                st.write("- Логи загрузки (должны быть в терминале)")
+    if 'vectordb' not in st.session_state or 'all_documents' not in st.session_state:
+        with st.spinner("🔄 Загрузка векторной базы..."):
+            try:
+                vectordb = load_vectorstore()
+                all_documents = list_documents(vectordb)
+                
+                if not all_documents:
+                    st.error("⚠️ В векторной базе нет документов! Проверьте:")
+                    st.write(f"- Папку с PDF: {config.PDF_DIR}")
+                    st.write("- Логи загрузки (должны быть в терминале)")
+                    st.write("- Возможно, база еще создается (это может занять несколько минут)")
+                    return
+                
+                st.session_state['vectordb'] = vectordb
+                st.session_state['all_documents'] = all_documents
+                
+            except Exception as e:
+                st.error(f"Ошибка загрузки: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
                 return
-            
-            st.session_state['vectordb'] = vectordb
-            st.session_state['all_documents'] = all_documents
-            
-        except Exception as e:
-            st.error(f"Ошибка загрузки: {str(e)}")
-            return
 
     # Боковая панель: список документов
     with st.sidebar:
