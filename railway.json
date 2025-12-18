@@ -1,18 +1,1 @@
-# Railway deployment configuration
-# This file helps Railway understand how to build and run your application
-
-# Build command (optional - Railway auto-detects Python)
-# build: pip install -r requirements.txt
-
-# Start command (defined in Procfile)
-# start: streamlit run app.py --server.port=$PORT --server.enableCORS=false
-
-# Environment variables needed:
-# OPENAI_API_KEY=your_openai_api_key_here
-
-# Railway will automatically:
-# 1. Detect this is a Python application
-# 2. Install dependencies from requirements.txt
-# 3. Use the Procfile to start the application
-# 4. Set PORT environment variable
-# 5. Expose the application on a public URL
+{"$schema":"https://railway.app/railway.schema.json","build":{"builder":"NIXPACKS","buildCommand":"pip install -r requirements.txt"},"deploy":{"startCommand":"streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.enableCORS=false --server.headless=true --browser.gatherUsageStats=false","restartPolicyType":"ON_FAILURE","restartPolicyMaxRetries":10}}
