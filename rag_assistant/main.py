@@ -34,11 +34,26 @@ def create_qa_chain(vectordb: Chroma):
         }
     )
     
-    llm = ChatOpenAI(
-        model=model_name  # GPT-5.2-Pro for best accuracy,
-        temperature=0,  # Для более точных ответов
-        openai_api_key=config.API_KEY
-    )
+    model_name = config.OPENAI_MODEL
+    
+    try:
+        llm = ChatOpenAI(
+            model=model_name,  # GPT-5.2-Pro for best accuracy
+            temperature=0,  # Для более точных ответов
+            openai_api_key=config.API_KEY,
+            max_tokens=4000,
+            model_kwargs={
+                "top_p": 0.95,
+            }
+        )
+    except Exception as e:
+        print(f"[WARN] GPT-5.2-Pro не доступен ({e}), используем GPT-4o")
+        llm = ChatOpenAI(
+            model="gpt-4o-2024-11-20",
+            temperature=0,
+            openai_api_key=config.API_KEY,
+            max_tokens=2000
+        )
     
     # Улучшенный промпт для ответов
     QA_PROMPT = """Ты - эксперт по строительным нормам. Ответь на вопрос, используя ТОЛЬКО предоставленные фрагменты документов. 
@@ -65,11 +80,12 @@ def create_qa_chain(vectordb: Chroma):
     )
     
     qa_chain = RetrievalQA.from_chain_type(
-        llm=llm, temperature=0),
-        retriever=vectordb.as_retriever(search_kwargs={"k": 15}),
+        llm=llm,
+        retriever=retriever,
         chain_type="stuff",
         return_source_documents=True,
-        chain_type_kwargs={"prompt": prompt}
+        chain_type_kwargs={"prompt": prompt},
+        verbose=False
     )
     return qa_chain
 
