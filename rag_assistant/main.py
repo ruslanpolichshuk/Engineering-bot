@@ -1,7 +1,14 @@
 import os
 from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import Chroma
-from langchain.chains import RetrievalQA
+# Import RetrievalQA - LangChain 0.1.0+ compatibility
+try:
+    from langchain.chains.retrieval_qa.base import RetrievalQA
+except ImportError:
+    try:
+        from langchain.chains.retrieval_qa import RetrievalQA
+    except ImportError:
+        from langchain.chains import RetrievalQA
 from rag_assistant.utils import get_or_create_vectorstore as utils_get_vectorstore
 from rag_assistant import config
 from langchain.prompts import PromptTemplate
