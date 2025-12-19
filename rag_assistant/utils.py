@@ -269,24 +269,24 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
     """
     print(f"[INFO] get_or_create_vectorstore: persist_dir={persist_dir}, force_rebuild={force_rebuild}")
     
-                # Выбор модели эмбеддингов: баланс скорости и точности
-                embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
-                embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
-                
-                # text-embedding-3-small: быстрее, но менее точная
-                # text-embedding-3-large: медленнее, но более точная
-                # Можно использовать small для скорости или large для точности
-                
-                print(f"[INFO] Используется модель эмбеддингов: {embedding_model} (размерность: {embedding_dimensions})")
-                
-                embeddings = OpenAIEmbeddings(
-                    model=embedding_model,
-                    dimensions=embedding_dimensions,
-                    # Оптимизация для батчей
-                    chunk_size=100,  # Размер батча для эмбеддингов (OpenAI рекомендует 100-1000)
-                    max_retries=3,
-                    request_timeout=60
-                )
+    # Выбор модели эмбеддингов: баланс скорости и точности
+    embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+    embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
+    
+    # text-embedding-3-small: быстрее, но менее точная
+    # text-embedding-3-large: медленнее, но более точная
+    # Можно использовать small для скорости или large для точности
+    
+    print(f"[INFO] Используется модель эмбеддингов: {embedding_model} (размерность: {embedding_dimensions})")
+    
+    embeddings = OpenAIEmbeddings(
+        model=embedding_model,
+        dimensions=embedding_dimensions,
+        # Оптимизация для батчей
+        chunk_size=100,  # Размер батча для эмбеддингов (OpenAI рекомендует 100-1000)
+        max_retries=3,
+        request_timeout=60
+    )
     
     # Файл блокировки для предотвращения параллельного создания
     lock_file_path = os.path.join(persist_dir, ".vectordb.lock")
@@ -482,13 +482,10 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
                 
                 total_batches = (len(chunks) + batch_size - 1) // batch_size
                 
-                # Параллельная или последовательная обработка
-                # ВАЖНО: ChromaDB не потокобезопасен для параллельной записи, поэтому параллелизм только для эмбеддингов
-                # Для полной параллельной обработки нужна более сложная архитектура
-                # Пока используем последовательную обработку с оптимизированными батчами
-                else:
-                    # Последовательная обработка (оригинальный код)
-                    for batch_idx in range(total_batches):
+                # Последовательная обработка батчей
+                # ВАЖНО: ChromaDB не потокобезопасен для параллельной записи
+                # Используем последовательную обработку с оптимизированными батчами
+                for batch_idx in range(total_batches):
                         start_idx = batch_idx * batch_size
                         end_idx = min(start_idx + batch_size, len(chunks))
                         batch = chunks[start_idx:end_idx]
@@ -511,61 +508,61 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
                             # Небольшая задержка между батчами для избежания rate limits
                             if batch_idx < total_batches - 1:
                                 time.sleep(0.3)  # Уменьшена задержка для ускорения
+                                
+                        except Exception as batch_error:
+                            error_msg = str(batch_error)
                             
-                    except Exception as batch_error:
-                        error_msg = str(batch_error)
-                        
-                        # Обработка лимита токенов
-                        if "max_tokens_per_request" in error_msg or "300000" in error_msg:
-                            print(f"[WARN] Лимит токенов достигнут для батча {batch_idx + 1}, уменьшаем размер...")
-                            smaller_batch_size = max(batch_size // 2, 10)
-                            
-                            # Разбиваем текущий батч на меньшие части
-                            for sub_batch_start in range(start_idx, end_idx, smaller_batch_size):
-                                sub_batch_end = min(sub_batch_start + smaller_batch_size, end_idx)
-                                sub_batch = chunks[sub_batch_start:sub_batch_end]
-                                retry_count = 0
-                                while retry_count < 3:
-                                    try:
-                                        vectordb.add_documents(sub_batch)
+                            # Обработка лимита токенов
+                            if "max_tokens_per_request" in error_msg or "300000" in error_msg:
+                                print(f"[WARN] Лимит токенов достигнут для батча {batch_idx + 1}, уменьшаем размер...")
+                                smaller_batch_size = max(batch_size // 2, 10)
+                                
+                                # Разбиваем текущий батч на меньшие части
+                                for sub_batch_start in range(start_idx, end_idx, smaller_batch_size):
+                                    sub_batch_end = min(sub_batch_start + smaller_batch_size, end_idx)
+                                    sub_batch = chunks[sub_batch_start:sub_batch_end]
+                                    retry_count = 0
+                                    while retry_count < 3:
                                         try:
-                                            if hasattr(vectordb, 'persist'):
-                                                vectordb.persist()
-                                        except:
-                                            pass
-                                        break
-                                    except Exception as sub_error:
-                                        retry_count += 1
-                                        if retry_count >= 3:
-                                            print(f"[ERROR] Не удалось обработать под-батч {sub_batch_start}-{sub_batch_end} после 3 попыток: {sub_error}")
-                                            # Пропускаем проблемный батч
+                                            vectordb.add_documents(sub_batch)
+                                            try:
+                                                if hasattr(vectordb, 'persist'):
+                                                    vectordb.persist()
+                                            except:
+                                                pass
                                             break
-                                        time.sleep(2 ** retry_count)  # Экспоненциальная задержка
+                                        except Exception as sub_error:
+                                            retry_count += 1
+                                            if retry_count >= 3:
+                                                print(f"[ERROR] Не удалось обработать под-батч {sub_batch_start}-{sub_batch_end} после 3 попыток: {sub_error}")
+                                                # Пропускаем проблемный батч
+                                                break
+                                            time.sleep(2 ** retry_count)  # Экспоненциальная задержка
+                                
+                                # Обновляем размер батча для следующих итераций
+                                batch_size = smaller_batch_size
                             
-                            # Обновляем размер батча для следующих итераций
-                            batch_size = smaller_batch_size
-                        
-                        # Обработка rate limits
-                        elif "rate_limit" in error_msg.lower() or "429" in error_msg:
-                            print(f"[WARN] Rate limit достигнут, ожидание 60 секунд...")
-                            time.sleep(60)
-                            # Повторяем текущий батч
-                            batch_idx -= 1
-                            continue
-                        
-                        # Другие ошибки
-                        else:
-                            print(f"[ERROR] Ошибка при обработке батча {batch_idx + 1}: {batch_error}")
-                            # Пробуем повторить с меньшим батчем
-                            if batch_size > 10:
-                                print(f"[WARN] Пробуем повторить с меньшим батчем...")
-                                batch_size = max(batch_size // 2, 10)
+                            # Обработка rate limits
+                            elif "rate_limit" in error_msg.lower() or "429" in error_msg:
+                                print(f"[WARN] Rate limit достигнут, ожидание 60 секунд...")
+                                time.sleep(60)
+                                # Повторяем текущий батч
                                 batch_idx -= 1
                                 continue
+                            
+                            # Другие ошибки
                             else:
-                                print(f"[ERROR] Критическая ошибка, пропускаем батч {batch_idx + 1}")
-                                # Пропускаем проблемный батч и продолжаем
-                                continue
+                                print(f"[ERROR] Ошибка при обработке батча {batch_idx + 1}: {batch_error}")
+                                # Пробуем повторить с меньшим батчем
+                                if batch_size > 10:
+                                    print(f"[WARN] Пробуем повторить с меньшим батчем...")
+                                    batch_size = max(batch_size // 2, 10)
+                                    batch_idx -= 1
+                                    continue
+                                else:
+                                    print(f"[ERROR] Критическая ошибка, пропускаем батч {batch_idx + 1}")
+                                    # Пропускаем проблемный батч и продолжаем
+                                    continue
                 
                 # Финальное сохранение (ChromaDB автоматически сохраняет при persist_directory)
                 try:
