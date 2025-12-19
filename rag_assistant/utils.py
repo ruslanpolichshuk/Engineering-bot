@@ -1,11 +1,41 @@
 import os
+import logging
 import pdfplumber
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 from pdfminer.pdfparser import PDFSyntaxError
 from rag_assistant import config
+
+# Отключаем telemetry ChromaDB для избежания ошибок
+logging.getLogger('chromadb.telemetry').setLevel(logging.CRITICAL)
+logging.getLogger('chromadb.telemetry.product.posthog').setLevel(logging.CRITICAL)
+
+# Отключаем telemetry через переменную окружения (если поддерживается)
+os.environ.setdefault('ANONYMIZED_TELEMETRY', 'False')
+
+# Опциональный импорт OCR библиотек
+try:
+    from pdf2image import convert_from_path
+    import pytesseract
+    
+    # Проверяем, доступен ли Tesseract
+    try:
+        pytesseract.get_tesseract_version()
+        OCR_AVAILABLE = True
+        print("[INFO] OCR доступен (Tesseract установлен)")
+    except Exception:
+        OCR_AVAILABLE = False
+        print("[WARN] OCR библиотеки установлены, но Tesseract не найден в системе.")
+        print("[WARN] Для работы OCR установите Tesseract OCR:")
+        print("[WARN]   Linux: sudo apt-get install tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng")
+        print("[WARN]   Windows: https://github.com/UB-Mannheim/tesseract/wiki")
+        print("[WARN]   Mac: brew install tesseract tesseract-lang")
+except ImportError:
+    OCR_AVAILABLE = False
+    print("[INFO] OCR библиотеки не установлены. Сканированные страницы будут пропущены.")
 
 # Импорт блокировки файлов (разный для разных ОС)
 try:
@@ -24,27 +54,128 @@ else:
     HAS_MSVCRT = False
 
 
+def _extract_text_with_ocr(pdf_path: str, page_num: int) -> str:
+    """Извлекает текст из страницы PDF с помощью OCR"""
+    if not OCR_AVAILABLE:
+        return None
+    
+    try:
+        # Конвертируем конкретную страницу в изображение
+        images = convert_from_path(
+            pdf_path,
+            first_page=page_num,
+            last_page=page_num,
+            dpi=300,  # Высокое разрешение для лучшего качества OCR
+            thread_count=1
+        )
+        
+        if not images:
+            return None
+        
+        # Применяем OCR к изображению
+        text = pytesseract.image_to_string(
+            images[0],
+            lang='rus+eng',  # Поддержка русского и английского
+            config='--psm 6'  # Предполагаем единый блок текста
+        )
+        
+        return text.strip() if text else None
+        
+    except Exception as e:
+        print(f"[WARN] OCR ошибка на странице {page_num}: {e}")
+        return None
+
+
 def parse_pdfs(pdf_dir: str) -> list[Document]:
     docs: list[Document] = []
+    total_files = 0
+    total_pages = 0
+    total_empty = 0
+    total_ocr = 0
+    
     for fname in os.listdir(pdf_dir):
         if not fname.lower().endswith('.pdf'):
             continue
+        total_files += 1
         path = os.path.join(pdf_dir, fname)
         try:
             print(f"[LOAD] Загружаем PDF: {fname}")
+            empty_pages = []
+            ocr_pages = []
+            file_docs = 0
+            
             with pdfplumber.open(path) as pdf:
+                num_pages = len(pdf.pages)
+                total_pages += num_pages
+                
                 for i, page in enumerate(pdf.pages):
                     text = page.extract_text()
-                    if not text:
-                        print(f"[WARN] Пустая страница {i+1} в {fname}")
+                    
+                    # Если текст пустой или слишком короткий, пробуем OCR
+                    if not text or not text.strip() or len(text.strip()) < 10:
+                        empty_pages.append(i + 1)
+                        
+                        # Пробуем OCR для сканированных страниц
+                        if OCR_AVAILABLE:
+                            ocr_text = _extract_text_with_ocr(path, i + 1)
+                            if ocr_text and len(ocr_text.strip()) >= 10:
+                                # OCR успешно распознал текст
+                                meta = {'source': fname, 'page': i + 1, 'ocr': True}
+                                docs.append(Document(page_content=ocr_text, metadata=meta))
+                                file_docs += 1
+                                total_ocr += 1
+                                ocr_pages.append(i + 1)
+                                continue
+                        
+                        # OCR не помог или недоступен
+                        total_empty += 1
                         continue
-                    meta = {'source': fname, 'page': i + 1}
+                    
+                    # Обычный текст из PDF
+                    meta = {'source': fname, 'page': i + 1, 'ocr': False}
                     docs.append(Document(page_content=text, metadata=meta))
+                    file_docs += 1
+                
+                # Выводим статистику по файлу
+                stats_parts = []
+                if empty_pages and not ocr_pages:
+                    # Только пустые страницы, без OCR
+                    if len(empty_pages) <= 5:
+                        stats_parts.append(f"пустые: {', '.join(map(str, empty_pages))}")
+                    else:
+                        stats_parts.append(f"пустых: {len(empty_pages)}")
+                elif ocr_pages:
+                    # Есть OCR страницы
+                    if len(ocr_pages) <= 5:
+                        stats_parts.append(f"OCR: {', '.join(map(str, ocr_pages))}")
+                    else:
+                        stats_parts.append(f"OCR: {len(ocr_pages)}")
+                    if len(empty_pages) > len(ocr_pages):
+                        remaining = len(empty_pages) - len(ocr_pages)
+                        stats_parts.append(f"пустых: {remaining}")
+                
+                if stats_parts:
+                    print(f"[INFO] Загружено {file_docs}/{num_pages} страниц ({', '.join(stats_parts)})")
+                else:
+                    print(f"[INFO] Загружено {file_docs} страниц")
+                    
         except PDFSyntaxError:
             print(f"[ERROR] Повреждён PDF: {fname}")
         except Exception as e:
             print(f"[ERROR] Ошибка с {fname}: {e}")
-    print(f"[RESULT] Загружено {len(docs)} страниц из {len(os.listdir(pdf_dir))} PDF-файлов")
+    
+    # Итоговая статистика
+    print(f"[RESULT] Обработано {total_files} PDF-файлов:")
+    print(f"  - Всего страниц: {total_pages}")
+    print(f"  - Загружено с текстом: {len(docs)}")
+    if total_ocr > 0:
+        print(f"  - Распознано через OCR: {total_ocr}")
+    if total_pages > 0:
+        empty_percent = total_empty * 100 / total_pages
+        print(f"  - Пустых/не распознанных: {total_empty} ({empty_percent:.1f}%)")
+    else:
+        print(f"  - Пустых/не распознанных: {total_empty}")
+    
     return docs
 
 
@@ -138,11 +269,24 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
     """
     print(f"[INFO] get_or_create_vectorstore: persist_dir={persist_dir}, force_rebuild={force_rebuild}")
     
-    # Use the latest and most accurate embedding model
-    embeddings = OpenAIEmbeddings(
-        model="text-embedding-3-large",
-        dimensions=1536  # Standard dimension for compatibility
-    )
+                # Выбор модели эмбеддингов: баланс скорости и точности
+                embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-large")
+                embedding_dimensions = int(os.getenv("EMBEDDING_DIMENSIONS", "1536"))
+                
+                # text-embedding-3-small: быстрее, но менее точная
+                # text-embedding-3-large: медленнее, но более точная
+                # Можно использовать small для скорости или large для точности
+                
+                print(f"[INFO] Используется модель эмбеддингов: {embedding_model} (размерность: {embedding_dimensions})")
+                
+                embeddings = OpenAIEmbeddings(
+                    model=embedding_model,
+                    dimensions=embedding_dimensions,
+                    # Оптимизация для батчей
+                    chunk_size=100,  # Размер батча для эмбеддингов (OpenAI рекомендует 100-1000)
+                    max_retries=3,
+                    request_timeout=60
+                )
     
     # Файл блокировки для предотвращения параллельного создания
     lock_file_path = os.path.join(persist_dir, ".vectordb.lock")
@@ -263,16 +407,45 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
                     )
                     return vectordb
                 
-                # Improved chunking strategy for better retrieval accuracy
+                # Оптимизированная стратегия разбиения на чанки для баланса скорости и точности
                 print(f"[INFO] Разбиваем документы на чанки...")
+                
+                # Настройки из конфига или умолчания
+                chunk_size = int(os.getenv("CHUNK_SIZE", "1200"))  # Оптимальный размер для технических документов
+                chunk_overlap = int(os.getenv("CHUNK_OVERLAP", "300"))  # Больше overlap для лучшего контекста
+                
                 splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=1000,  # Increased for better context
-                    chunk_overlap=200,  # Increased overlap for continuity
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,  # 25% overlap для лучшего контекста
                     length_function=len,
-                    separators=["\n\n", "\n", ". ", " ", ""]  # Better separation for technical documents
+                    separators=[
+                        "\n\n\n",  # Разделы документов
+                        "\n\n",    # Параграфы
+                        "\n",      # Строки
+                        ". ",      # Предложения
+                        " ",       # Слова
+                        ""         # Символы
+                    ],
+                    keep_separator=True  # Сохраняем разделители для контекста
                 )
                 chunks = splitter.split_documents(docs)
+                
+                # Улучшаем метаданные для лучшей точности поиска
+                for i, chunk in enumerate(chunks):
+                    # Добавляем информацию о позиции в документе
+                    if 'page' in chunk.metadata:
+                        chunk.metadata['chunk_index'] = i
+                        # Добавляем префикс с номером документа для лучшей идентификации
+                        source = chunk.metadata.get('source', '')
+                        if source:
+                            # Извлекаем номер документа из названия (СН РК X.XX-XX-XXXX)
+                            import re
+                            doc_number = re.search(r'СН РК [\d.]+-[\d.]+-[\d]+', source)
+                            if doc_number:
+                                chunk.metadata['doc_number'] = doc_number.group()
+                
                 print(f"[INFO] Создано {len(chunks)} чанков из {len(docs)} документов")
+                print(f"[INFO] Средний размер чанка: {sum(len(c.page_content) for c in chunks) // len(chunks) if chunks else 0} символов")
                 
                 # Check disk space before creating embeddings
                 if os.path.exists(persist_dir):
@@ -280,16 +453,126 @@ def get_or_create_vectorstore(pdf_dir, persist_dir, force_rebuild=False):
                     print(f"[INFO] Дисковое пространство: использовано {used // (1024**2)} MB, свободно {free // (1024**2)} MB")
                 
                 print(f"[INFO] Генерация эмбеддингов через OpenAI API (это может занять несколько минут для {len(chunks)} чанков)...")
+                print(f"[INFO] Используем батчинг для избежания лимита токенов (макс. 300000 токенов на запрос)")
                 start_time = time.time()
                 
-                # Создаем базу (ChromaDB автоматически сохраняет при указании persist_directory)
-                vectordb = Chroma.from_documents(
-                    documents=chunks,
-                    embedding=embeddings,
-                    persist_directory=persist_dir
+                # Создаем пустую базу
+                vectordb = Chroma(
+                    persist_directory=persist_dir,
+                    embedding_function=embeddings
                 )
                 
-                # Даем время на сохранение
+                # Оптимизированный батчинг с учетом модели и размера чанков
+                # OpenAI API имеет лимит 300000 токенов на запрос
+                # text-embedding-3-large: ~1 токен на 4 символа
+                # Средний размер чанка ~1200 символов = ~300 токенов
+                # Безопасный батч: 300000 / 300 = ~1000 чанков, но используем 800 для запаса
+                
+                avg_chunk_size = sum(len(c.page_content) for c in chunks) // len(chunks) if chunks else 1200
+                tokens_per_chunk = avg_chunk_size // 4  # Примерно 1 токен на 4 символа
+                safe_batch_size = min(800, (250000 // tokens_per_chunk) if tokens_per_chunk > 0 else 500)
+                
+                batch_size = int(os.getenv("EMBEDDING_BATCH_SIZE", str(safe_batch_size)))
+                use_parallel = os.getenv("USE_PARALLEL_EMBEDDINGS", "false").lower() == "true"
+                max_workers = int(os.getenv("MAX_WORKERS", "3"))  # Параллельные запросы к API
+                
+                print(f"[INFO] Размер батча: {batch_size} чанков (средний размер чанка: {avg_chunk_size} символов, ~{tokens_per_chunk} токенов)")
+                if use_parallel:
+                    print(f"[INFO] Параллельная обработка: {max_workers} потоков")
+                
+                total_batches = (len(chunks) + batch_size - 1) // batch_size
+                
+                # Параллельная или последовательная обработка
+                # ВАЖНО: ChromaDB не потокобезопасен для параллельной записи, поэтому параллелизм только для эмбеддингов
+                # Для полной параллельной обработки нужна более сложная архитектура
+                # Пока используем последовательную обработку с оптимизированными батчами
+                else:
+                    # Последовательная обработка (оригинальный код)
+                    for batch_idx in range(total_batches):
+                        start_idx = batch_idx * batch_size
+                        end_idx = min(start_idx + batch_size, len(chunks))
+                        batch = chunks[start_idx:end_idx]
+                        
+                        print(f"[INFO] Обработка батча {batch_idx + 1}/{total_batches} ({len(batch)} чанков, {start_idx+1}-{end_idx})...")
+                        
+                        try:
+                            # Добавляем батч в базу
+                            vectordb.add_documents(batch)
+                            
+                            # Периодически сохраняем прогресс (ChromaDB автоматически сохраняет, но можно явно вызвать)
+                            if (batch_idx + 1) % 10 == 0 or batch_idx == total_batches - 1:
+                                try:
+                                    if hasattr(vectordb, 'persist'):
+                                        vectordb.persist()
+                                except:
+                                    pass  # persist может не существовать в новых версиях
+                                print(f"[INFO] Прогресс: {end_idx}/{len(chunks)} чанков обработано ({(end_idx*100)//len(chunks)}%)")
+                            
+                            # Небольшая задержка между батчами для избежания rate limits
+                            if batch_idx < total_batches - 1:
+                                time.sleep(0.3)  # Уменьшена задержка для ускорения
+                            
+                    except Exception as batch_error:
+                        error_msg = str(batch_error)
+                        
+                        # Обработка лимита токенов
+                        if "max_tokens_per_request" in error_msg or "300000" in error_msg:
+                            print(f"[WARN] Лимит токенов достигнут для батча {batch_idx + 1}, уменьшаем размер...")
+                            smaller_batch_size = max(batch_size // 2, 10)
+                            
+                            # Разбиваем текущий батч на меньшие части
+                            for sub_batch_start in range(start_idx, end_idx, smaller_batch_size):
+                                sub_batch_end = min(sub_batch_start + smaller_batch_size, end_idx)
+                                sub_batch = chunks[sub_batch_start:sub_batch_end]
+                                retry_count = 0
+                                while retry_count < 3:
+                                    try:
+                                        vectordb.add_documents(sub_batch)
+                                        try:
+                                            if hasattr(vectordb, 'persist'):
+                                                vectordb.persist()
+                                        except:
+                                            pass
+                                        break
+                                    except Exception as sub_error:
+                                        retry_count += 1
+                                        if retry_count >= 3:
+                                            print(f"[ERROR] Не удалось обработать под-батч {sub_batch_start}-{sub_batch_end} после 3 попыток: {sub_error}")
+                                            # Пропускаем проблемный батч
+                                            break
+                                        time.sleep(2 ** retry_count)  # Экспоненциальная задержка
+                            
+                            # Обновляем размер батча для следующих итераций
+                            batch_size = smaller_batch_size
+                        
+                        # Обработка rate limits
+                        elif "rate_limit" in error_msg.lower() or "429" in error_msg:
+                            print(f"[WARN] Rate limit достигнут, ожидание 60 секунд...")
+                            time.sleep(60)
+                            # Повторяем текущий батч
+                            batch_idx -= 1
+                            continue
+                        
+                        # Другие ошибки
+                        else:
+                            print(f"[ERROR] Ошибка при обработке батча {batch_idx + 1}: {batch_error}")
+                            # Пробуем повторить с меньшим батчем
+                            if batch_size > 10:
+                                print(f"[WARN] Пробуем повторить с меньшим батчем...")
+                                batch_size = max(batch_size // 2, 10)
+                                batch_idx -= 1
+                                continue
+                            else:
+                                print(f"[ERROR] Критическая ошибка, пропускаем батч {batch_idx + 1}")
+                                # Пропускаем проблемный батч и продолжаем
+                                continue
+                
+                # Финальное сохранение (ChromaDB автоматически сохраняет при persist_directory)
+                try:
+                    if hasattr(vectordb, 'persist'):
+                        vectordb.persist()
+                except:
+                    pass
                 time.sleep(2)
                 
                 elapsed_time = time.time() - start_time

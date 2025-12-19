@@ -14,6 +14,9 @@ logging.basicConfig(level=logging.WARNING)
 # Отключаем особенно шумные логи от pdfminer
 logging.getLogger('pdfminer').setLevel(logging.ERROR)
 logging.getLogger('pdfplumber').setLevel(logging.WARNING)
+# Отключаем telemetry ChromaDB (избегаем ошибок с posthog)
+logging.getLogger('chromadb.telemetry').setLevel(logging.CRITICAL)
+logging.getLogger('chromadb.telemetry.product.posthog').setLevel(logging.CRITICAL)
 
 # Должен быть ПЕРВЫМ вызовом в скрипте
 st.set_page_config(

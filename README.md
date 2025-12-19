@@ -6,7 +6,8 @@ A powerful Retrieval-Augmented Generation (RAG) assistant with Knowledge Graph i
 
 - **Knowledge Graph RAG**: Enhanced retrieval using knowledge graphs
 - **Self-RAG**: Self-reflective retrieval augmented generation with LangGraph
-- **Document Processing**: PDF document ingestion and processing
+- **Document Processing**: PDF document ingestion and processing with OCR support
+- **OCR Support**: Automatic text recognition for scanned PDF documents (Tesseract OCR)
 - **Vector Database**: Efficient document storage and retrieval
 - **Web Interface**: Streamlit-based user interface
 
@@ -15,6 +16,10 @@ A powerful Retrieval-Augmented Generation (RAG) assistant with Knowledge Graph i
 - Python 3.8 or higher
 - OpenAI API key
 - Git
+- **Tesseract OCR** (optional, for scanned PDF processing):
+  - Windows: Download from [UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+  - macOS: `brew install tesseract tesseract-lang`
+  - Linux: `sudo apt-get install tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng poppler-utils`
 
 ## Installation
 
@@ -26,17 +31,22 @@ A powerful Retrieval-Augmented Generation (RAG) assistant with Knowledge Graph i
    cd rag-assistant
    ```
 
-2. Create a `.env` file with your OpenAI API key:
+2. Install Tesseract OCR (optional, for scanned PDFs):
+   - Download installer from [UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+   - Install and add to PATH
+   - Install Russian and English language packs during installation
+
+3. Create a `.env` file with your OpenAI API key:
    ```
    OPENAI_API_KEY=your_api_key_here
    ```
 
-3. Run the setup verification:
+4. Run the setup verification:
    ```cmd
    verify_setup.bat
    ```
 
-4. Start the application:
+5. Start the application:
    ```cmd
    run_app.bat
    ```
@@ -53,9 +63,9 @@ A powerful Retrieval-Augmented Generation (RAG) assistant with Knowledge Graph i
    cd rag-assistant
    ```
 
-2. Install Python 3 (if not already installed):
+2. Install Python 3 and Tesseract OCR (if not already installed):
    ```bash
-   brew install python3
+   brew install python3 tesseract tesseract-lang poppler
    ```
 
 3. Create a `.env` file with your OpenAI API key:
@@ -81,10 +91,10 @@ A powerful Retrieval-Augmented Generation (RAG) assistant with Knowledge Graph i
    cd rag-assistant
    ```
 
-2. Install Python 3 (if not already installed):
+2. Install Python 3 and Tesseract OCR (if not already installed):
    ```bash
    sudo apt update
-   sudo apt install python3 python3-pip
+   sudo apt install python3 python3-pip tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng poppler-utils
    ```
 
 3. Create a `.env` file with your OpenAI API key:
@@ -107,9 +117,17 @@ A powerful Retrieval-Augmented Generation (RAG) assistant with Knowledge Graph i
 ## Usage
 
 1. The application will start on `http://localhost:8501`
-2. Upload PDF documents through the web interface
-3. Ask questions about your documents
-4. The system will use RAG with knowledge graphs to provide accurate answers
+2. PDF documents are automatically processed from the `downloaded_pdfs` directory
+3. **OCR Processing**: Scanned PDF pages without text are automatically processed with OCR (if Tesseract is installed)
+4. Ask questions about your documents
+5. The system will use RAG with knowledge graphs to provide accurate answers
+
+### OCR Features
+
+- **Automatic Detection**: Pages without extractable text are automatically processed with OCR
+- **Multi-language Support**: Russian and English text recognition
+- **High Quality**: 300 DPI resolution for better accuracy
+- **Graceful Fallback**: If OCR is unavailable, scanned pages are skipped with a warning
 
 ## Project Structure
 

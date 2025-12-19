@@ -2,7 +2,7 @@
   "$schema": "https://railway.app/railway.schema.json",
   "build": {
     "builder": "RAILPACK",
-    "buildCommand": "pip install -r requirements.txt"
+    "buildCommand": "apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-rus tesseract-ocr-eng poppler-utils && pip install -r requirements.txt"
   },
   "deploy": {
     "startCommand": "streamlit run app.py --server.port=$PORT --server.address=0.0.0.0 --server.enableCORS=false --server.headless=true --browser.gatherUsageStats=false",
